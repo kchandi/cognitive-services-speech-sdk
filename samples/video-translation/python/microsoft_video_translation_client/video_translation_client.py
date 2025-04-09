@@ -14,10 +14,10 @@ from enum import Enum
 from datetime import datetime
 from typing import List
 from urllib3.util import Url
-from microsoft_video_translation_client.video_translation_const import *
-from microsoft_video_translation_client.video_translation_enum import *
-from microsoft_video_translation_client.video_translation_dataclass import *
-from microsoft_video_translation_client.video_translation_util import *
+from video_translation_const import *
+from video_translation_enum import *
+from video_translation_dataclass import *
+from video_translation_util import *
 from urllib.parse import urlencode
 from pydantic import BaseModel
 import time

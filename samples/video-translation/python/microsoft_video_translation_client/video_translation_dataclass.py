@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from urllib3.util import Url
 from typing import Optional
 
-from microsoft_video_translation_client.video_translation_enum import *
+from video_translation_enum import *
 
 @dataclass(kw_only=True)
 class OperationDefinition():

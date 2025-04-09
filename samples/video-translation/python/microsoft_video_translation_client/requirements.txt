@@ -1,0 +1,38 @@
+# Azure SDKs
+azure-identity>=1.10.0
+azure-storage-blob>=12.14.0
+
+# Semantic Kernel
+semantic-kernel>=0.4.1
+
+# Azure OpenAI integration for Semantic Kernel
+semantic-kernel[openai]>=0.4.1
+
+# Environment variables
+python-dotenv>=1.0.0
+
+# Async HTTP requests (used by VideoTranslationClient)
+aiohttp>=3.8.0
+
+# Regular HTTP requests (used by VideoTranslationClient)
+requests>=2.28.0
+urllib3>=2.0.0
+
+# JSON libraries used in VideoTranslationClient
+orjson>=3.9.0
+pydantic>=2.4.0
+
+# Terminal coloring for output
+termcolor>=2.3.0
+
+# Required for video transcription/translation
+azure-cognitiveservices-speech>=1.31.0
+
+# Typing support
+typing-extensions>=4.7.0
+
+# Async utilities
+async-timeout>=4.0.0
+
+# Date/time handling
+python-dateutil>=2.8.2
