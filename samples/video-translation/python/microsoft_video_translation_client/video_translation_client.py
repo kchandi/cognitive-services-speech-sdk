@@ -11,8 +11,8 @@ import json
 import dataclasses
 from termcolor import colored
 from enum import Enum
-from datetime import datetime
-from typing import List
+from datetime import datetime, timedelta
+from typing import List, Optional, Any, Union
 from urllib3.util import Url
 from video_translation_const import *
 from video_translation_enum import *
@@ -21,22 +21,46 @@ from video_translation_util import *
 from urllib.parse import urlencode
 from pydantic import BaseModel
 import time
+import logging
+
+# Import Azure Identity components if available
+try:
+    from azure.core.credentials import TokenCredential
+    from azure.identity import DefaultAzureCredential
+    HAS_AZURE_IDENTITY = True
+except ImportError:
+    HAS_AZURE_IDENTITY = False
 
 class VideoTranslationClient:
     URL_SEGMENT_NAME_TRANSLATIONS = "translations"
     URL_SEGMENT_NAME_ITERATIONS = "iterations"
     URL_PATH_ROOT = "videotranslation"
     
-    region = ""
-    sub_key = ""
-    api_version = ""
-
-    def __init__(self, region, sub_key, api_version):
-        if region is None or sub_key is None:
-            raise ValueError
+    # Scope for Video Translation API
+    VIDEO_TRANSLATION_SCOPE = "https://cognitiveservices.azure.com/.default"
+    
+    def __init__(self, region: str, api_version: str, sub_key: str = None, credential: Any = None):
+        """
+        Initialize the Video Translation client.
+        
+        Args:
+            region: Azure region (e.g. "eastus")
+            api_version: API version to use (e.g. "2024-05-20-preview")
+            sub_key: Optional subscription key for key-based authentication
+            credential: Optional Azure credential for token-based authentication
+        """
+        if region is None:
+            raise ValueError("Region must be specified")
+        
+        if sub_key is None and credential is None:
+            raise ValueError("Either subscription key or credential must be provided")
+            
         self.region = region
-        self.sub_key = sub_key
         self.api_version = api_version
+        self.sub_key = sub_key
+        self.credential = credential
+        self.token = None
+        self.token_expiry = None
         
         # not retry for below response code:
         #   OK = 200,
@@ -51,6 +75,27 @@ class VideoTranslationClient:
         retries = urllib3.Retry(total=5, status_forcelist=status_forcelist)
         timeout = urllib3.util.Timeout(10)
         self.http = urllib3.PoolManager(timeout=timeout, retries=retries)
+        
+        # Setup HTTP transport with debug logger
+        logging.basicConfig(level=logging.DEBUG)
+        http_logger = logging.getLogger("urllib3")
+        http_logger.setLevel(logging.DEBUG)
+        http_logger.propagate = True
+        
+        # Log connection parameters
+        print(f"\n=== CONNECTION SETUP ===")
+        print(f"Region: {region}")
+        print(f"API Version: {api_version}")
+        print(f"Using Credential: {credential is not None}")
+        print(f"Using Key Authentication: {sub_key is not None}")
+        print(f"URL_PATH_ROOT: {self.URL_PATH_ROOT}")
+        print(f"========================\n")
+
+        # Log the authentication method being used
+        if self.credential:
+            print(f"Using token-based authentication for Video Translation client")
+        elif self.sub_key:
+            print(f"Using key-based authentication for Video Translation client")
 
     # For most common scenario, customer not need provide webvtt first iteration.
     # Even, it is supported to provide webvtt for the first iteration, customer can customize the client code if they want to run first iteration with webvtt.
@@ -64,12 +109,13 @@ class VideoTranslationClient:
         subtitle_max_char_count_per_segment: int = None,
         export_subtitle_in_video: bool = None
     ) -> tuple[bool, str, TranslationDefinition, IterationDefinition]:
-        if video_file_url is None or source_locale is None or target_locale is None or voice_kind is None or voice_kind is None:
+        if video_file_url is None or source_locale is None or target_locale is None or voice_kind is None:
             raise ValueError
         
         now = datetime.now()
         nowString = now.strftime("%m%d%Y%H%M%S")
-        translation_id = f"{nowString}_{source_locale}_{target_locale}_{voice_kind}"
+        # translation_id = f"{nowString}_{source_locale}_{target_locale}_{voice_kind}"
+        translation_id = f"{nowString}"
         success, error, translation = self.create_translation_until_terminated(
             translation_id = translation_id,
             video_file_url = video_file_url,
@@ -300,10 +346,50 @@ class VideoTranslationClient:
         path = self.build_iteration_path(translation_id, iteration_id)
         return self.build_url(path)
     
+    def get_auth_token(self) -> Optional[str]:
+        """Get an authentication token using the provided credential"""
+        # If token exists and is not expired, return it
+        current_time = datetime.now()
+        if self.token and self.token_expiry and current_time < self.token_expiry:
+            return self.token
+            
+        # Otherwise, get a new token
+        try:
+            if not self.credential:
+                print("No credential available for token acquisition")
+                return None
+                
+            # Get token with appropriate scope
+            access_token = self.credential.get_token(self.VIDEO_TRANSLATION_SCOPE)
+            
+            if access_token and access_token.token:
+                # Set token and expiry (subtract 5 minutes for safety margin)
+                self.token = access_token.token
+                print(f"Successfully acquired new token (first 10 chars): {self.token[:10]}...")
+                self.token_expiry = current_time + timedelta(seconds=access_token.expires_on - 300)
+                return self.token
+        except Exception as e:
+            print(f"Failed to get authentication token: {str(e)}")
+            return None
+            
+        return None
+    
     def build_request_header(self) -> dict:
-        return {
-            "Ocp-Apim-Subscription-Key": self.sub_key
-        }
+        """Build the request headers with appropriate authentication"""
+        headers = {}
+        
+        # First try token-based auth if credential is available
+        if self.credential:
+            token = self.get_auth_token()
+            if token:
+                headers["Authorization"] = f"Bearer {token}"
+                return headers
+        
+        # Fall back to subscription key if available
+        if self.sub_key:
+            headers["Ocp-Apim-Subscription-Key"] = self.sub_key
+        
+        return headers
         
     # https://learn.microsoft.com/en-us/rest/api/aiservices/videotranslation/operation-operations/get-operation?view=rest-aiservices-videotranslation-2024-05-20-preview&tabs=HTTP
     def request_get_operation(self,
@@ -413,7 +499,7 @@ class VideoTranslationClient:
             data = response_translations_json,
             dataclass_type = PagedTranslationDefinition)
         return True, None, response_translations
-
+    
     # https://learn.microsoft.com/en-us/rest/api/aiservices/videotranslation/iteration-operations/list-iteration?view=rest-aiservices-videotranslation-2024-05-20-preview&tabs=HTTP
     def request_list_iterations(self) -> tuple[bool, str, PagedIterationDefinition]:
         url = self.build_iterations_url()
@@ -486,9 +572,33 @@ class VideoTranslationClient:
         url = self.build_translation_url(translation_id)
         headers = self.build_request_header()
         headers["Operation-Id"] = operation_id
-        
+
+        print("\n=== DETAILED REQUEST LOGGING ===")
+        print(f"Full Request URL: {url.url}")
+        print(f"Request Headers: {json.dumps(headers, indent=2)}")
+        print(f"Request Body: {encoded_translation_create_body.decode('utf-8')}")
+        print(f"Base URL Path: {self.URL_PATH_ROOT}")
+        print(f"Translation ID: {translation_id}")
+        print(f"Region: {self.region}")
+        print(f"API Version: {self.api_version}")
+        print("==============================\n")
+            
         print(f"Requesting http PUT: {url}")
         response = self.http.request("PUT", url.url, headers = headers, body=encoded_translation_create_body)
+        
+        # Add response logging
+        print("\n=== DETAILED RESPONSE LOGGING ===")
+        print(f"Response Status: {response.status}")
+        print(f"Response Headers: {json.dumps(dict(response.headers), indent=2)}")
+        print(f"Response Body: {response.data.decode('utf-8')}")
+        print("==============================\n")
+        
+        # Handle authentication errors specifically
+        if response.status == 401:
+            error_message = response.data.decode('utf-8')
+            if "AuthenticationTypeDisabled" in error_message:
+                return False, "Key-based authentication is disabled for this resource. Please use token-based authentication with Azure AD credentials.", None, None
+            return False, f"Authentication failed: {error_message}", None, None
         
         #   OK = 200,
         #   Created = 201,
@@ -546,6 +656,13 @@ class VideoTranslationClient:
         print(f"Requesting http PUT: {url}")
         response = self.http.request("PUT", url.url, headers = headers, body=encoded_iteration_create_body)
         
+        # Handle authentication errors specifically
+        if response.status == 401:
+            error_message = response.data.decode('utf-8')
+            if "AuthenticationTypeDisabled" in error_message:
+                return False, "Key-based authentication is disabled for this resource. Please use token-based authentication with Azure AD credentials.", None, None
+            return False, f"Authentication failed: {error_message}", None, None
+        
         #   OK = 200,
         #   Created = 201,
         if not response.status in [200, 201]:
@@ -558,4 +675,3 @@ class VideoTranslationClient:
         operation_location = response.headers[HTTP_HEADERS_OPERATION_LOCATION]
         operation_location_url = urllib3.util.parse_url(operation_location)
         return True, None, response_iteration, operation_location_url
-    

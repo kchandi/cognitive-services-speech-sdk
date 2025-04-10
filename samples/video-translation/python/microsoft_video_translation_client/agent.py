@@ -23,25 +23,44 @@ class VideoTranslationPlugin:
     """A plugin that provides access to video translation capabilities."""
     
     def __init__(self):
-        self.client = VideoTranslationClient(
-            region=os.getenv("SPEECH_REGION", ""),
-            sub_key=os.getenv("SPEECH_KEY", ""),
-            api_version=os.getenv("API_VERSION", "2024-05-20-preview")
-        )
-        
+        # Initialize credential for all Azure services including Video Translation
         try:
+            # DefaultAzureCredential tries multiple credential sources including Managed Identity
             self.credential = DefaultAzureCredential()
-            print("Successfully initialized DefaultAzureCredential for storage access")
+            print("Successfully initialized DefaultAzureCredential for Azure services")
+            
+            # Initialize client with token-based auth
+            self.client = VideoTranslationClient(
+                region=os.getenv("SPEECH_REGION", ""),
+                api_version=os.getenv("API_VERSION", "2024-05-20-preview"),
+                credential=self.credential  # Pass credential for token-based auth
+            )
+            
         except Exception as e:
             print(f"DefaultAzureCredential failed: {str(e)}")
             try:
                 # Fall back to CLI credential if available (for local development)
                 self.credential = AzureCliCredential()
-                print("Using AzureCliCredential for storage access")
+                print("Using AzureCliCredential for Azure services")
+                
+                # Initialize client with CLI credential
+                self.client = VideoTranslationClient(
+                    region=os.getenv("SPEECH_REGION", ""),
+                    api_version=os.getenv("API_VERSION", "2024-05-20-preview"),
+                    credential=self.credential
+                )
             except Exception as cli_error:
                 print(f"AzureCliCredential failed: {str(cli_error)}")
+                print("WARNING: No valid credential available. Video translation operations may fail.")
                 self.credential = None
-                print("Warning: No valid credential available for storage access")
+                
+                # Fallback to key-based auth as last resort (though this will likely fail if disabled)
+                self.client = VideoTranslationClient(
+                    region=os.getenv("SPEECH_REGION", ""),
+                    api_version=os.getenv("API_VERSION", "2024-05-20-preview"),
+                    sub_key=os.getenv("SPEECH_KEY", "")
+                )
+                print("WARNING: Using key-based auth which may be disabled for your resource")
     
     @kernel_function(description="Translates a video file from source language to target language")
     def translate_video(self, 
@@ -194,44 +213,44 @@ class VideoTranslationPlugin:
         except Exception as e:
             return f"An error occurred while deleting the translation: {str(e)}"
         
-    @kernel_function(description="Tests Azure Storage RBAC access")
-    def test_storage_access(self, blob_url: Annotated[str, "The Azure blob URL to test access"]) -> Annotated[str, "Returns the access status"]:
-        """Tests if the agent can access the Azure Storage blob using RBAC."""
-        try:
-            if not self.credential:
-                return "No valid credential available for storage access."
+    # @kernel_function(description="Tests Azure Storage RBAC access")
+    # def test_storage_access(self, blob_url: Annotated[str, "The Azure blob URL to test access"]) -> Annotated[str, "Returns the access status"]:
+    #     """Tests if the agent can access the Azure Storage blob using RBAC."""
+    #     try:
+    #         if not self.credential:
+    #             return "No valid credential available for storage access."
                 
-            match = re.match(r'https://([^/]+)/([^/]+)/(.+)', blob_url)
-            if not match:
-                return f"Invalid blob URL format: {blob_url}"
+    #         match = re.match(r'https://([^/]+)/([^/]+)/(.+)', blob_url)
+    #         if not match:
+    #             return f"Invalid blob URL format: {blob_url}"
                 
-            account_name = match.group(1).split('.')[0]
-            container_name = match.group(2)
-            blob_name = match.group(3)
+    #         account_name = match.group(1).split('.')[0]
+    #         container_name = match.group(2)
+    #         blob_name = match.group(3)
             
-            account_url = f"https://{account_name}.blob.core.windows.net"
-            blob_service_client = BlobServiceClient(
-                account_url=account_url,
-                credential=self.credential
-            )
+    #         account_url = f"https://{account_name}.blob.core.windows.net"
+    #         blob_service_client = BlobServiceClient(
+    #             account_url=account_url,
+    #             credential=self.credential
+    #         )
             
-            container_client = blob_service_client.get_container_client(container_name)
+    #         container_client = blob_service_client.get_container_client(container_name)
             
-            blobs = list(container_client.list_blobs(name_starts_with=blob_name, max_results=1))
+    #         blobs = list(container_client.list_blobs(name_starts_with=blob_name, max_results=1))
             
-            blob_client = container_client.get_blob_client(blob_name)
+    #         blob_client = container_client.get_blob_client(blob_name)
             
-            properties = blob_client.get_blob_properties()
+    #         properties = blob_client.get_blob_properties()
             
-            return (f"Successfully accessed storage using Managed Identity.\n"
-                   f"Account: {account_name}\n"
-                   f"Container: {container_name}\n"
-                   f"Blob name: {properties.name}\n"
-                   f"Content type: {properties.content_settings.content_type}\n"
-                   f"Size: {properties.size} bytes\n"
-                   f"Last modified: {properties.last_modified}")
-        except Exception as e:
-            return f"Error testing storage access: {str(e)}\n\nThis may indicate that the Managed Identity does not have sufficient RBAC permissions on this storage account. Ensure the MI has been assigned an appropriate role (like Storage Blob Data Reader)."
+    #         return (f"Successfully accessed storage using Managed Identity.\n"
+    #                f"Account: {account_name}\n"
+    #                f"Container: {container_name}\n"
+    #                f"Blob name: {properties.name}\n"
+    #                f"Content type: {properties.content_settings.content_type}\n"
+    #                f"Size: {properties.size} bytes\n"
+    #                f"Last modified: {properties.last_modified}")
+    #     except Exception as e:
+    #         return f"Error testing storage access: {str(e)}\n\nThis may indicate that the Managed Identity does not have sufficient RBAC permissions on this storage account. Ensure the MI has been assigned an appropriate role (like Storage Blob Data Reader)."
 
     @kernel_function(description="Uploads content to Azure Blob Storage using Managed Identity")
     def upload_to_storage(self, 
@@ -277,10 +296,17 @@ class VideoTranslationPlugin:
                             ) -> Annotated[str, "Returns the blob content or error message"]:
         """Downloads text content from Azure Blob Storage using Managed Identity."""
         try:
+            # Log the storage parameters being used
+            print(f"Downloading from storage with parameters:")
+            print(f"  Account name: {account_name}")
+            print(f"  Container name: {container_name}")
+            print(f"  Blob name: {blob_name}")
+            
             if not self.credential:
                 return "No valid credential available for storage access."
             
             container_endpoint = f"https://{account_name}.blob.core.windows.net/{container_name}"
+            
             
             container_client = ContainerClient(
                 endpoint=container_endpoint,
@@ -310,49 +336,49 @@ class VideoTranslationPlugin:
             except Exception as e:
                 return f"Error downloading blob content: {str(e)}\n\nThis may indicate that the Managed Identity does not have sufficient RBAC permissions (like Storage Blob Data Reader) on this storage account."
         except Exception as e:
-            return f"Error initializing storage client: {str(e)}"
+             return f"Error initializing storage client: {str(e)}"
     
-    @kernel_function(description="Reads a specific blob from a URL using Managed Identity")
-    def read_blob_from_url(self, blob_url: Annotated[str, "The complete URL of the blob to read"]) -> Annotated[str, "Returns the blob content or error message"]:
-        """Reads content from a blob storage URL using Managed Identity."""
-        try:
-            if not self.credential:
-                return "No valid credential available for storage access."
+    # @kernel_function(description="Reads a specific blob from a URL using Managed Identity")
+    # def read_blob_from_url(self, blob_url: Annotated[str, "The complete URL of the blob to read"]) -> Annotated[str, "Returns the blob content or error message"]:
+    #     """Reads content from a blob storage URL using Managed Identity."""
+    #     try:
+    #         if not self.credential:
+    #             return "No valid credential available for storage access."
             
-            match = re.match(r'https://([^/]+)/([^/]+)/(.+)', blob_url)
-            if not match:
-                return f"Invalid blob URL format: {blob_url}"
+    #         match = re.match(r'https://([^/]+)/([^/]+)/(.+)', blob_url)
+    #         if not match:
+    #             return f"Invalid blob URL format: {blob_url}"
                 
-            account_name = match.group(1).split('.')[0]
-            container_name = match.group(2)
-            blob_name = match.group(3)
+    #         account_name = match.group(1).split('.')[0]
+    #         container_name = match.group(2)
+    #         blob_name = match.group(3)
             
-            blob_client = BlobClient(
-                account_url=f"https://{account_name}.blob.core.windows.net",
-                container_name=container_name,
-                blob_name=blob_name,
-                credential=self.credential
-            )
+    #         blob_client = BlobClient(
+    #             account_url=f"https://{account_name}.blob.core.windows.net",
+    #             container_name=container_name,
+    #             blob_name=blob_name,
+    #             credential=self.credential
+    #         )
             
-            if not blob_client.exists():
-                return f"Error: The blob at URL '{blob_url}' does not exist."
+    #         if not blob_client.exists():
+    #             return f"Error: The blob at URL '{blob_url}' does not exist."
             
-            download_stream = blob_client.download_blob()
-            content = download_stream.readall().decode('utf-8')
+    #         download_stream = blob_client.download_blob()
+    #         content = download_stream.readall().decode('utf-8')
             
-            properties = blob_client.get_blob_properties()
-            content_type = properties.content_settings.content_type
-            size = properties.size
+    #         properties = blob_client.get_blob_properties()
+    #         content_type = properties.content_settings.content_type
+    #         size = properties.size
             
-            content_preview = content[:1000] + "..." if len(content) > 1000 else content
+    #         content_preview = content[:1000] + "..." if len(content) > 1000 else content
             
-            return (f"Successfully read blob from URL using Managed Identity.\n"
-                   f"URL: {blob_url}\n"
-                   f"Content Type: {content_type}\n"
-                   f"Size: {size} bytes\n\n"
-                   f"Content Preview:\n{content_preview}")
-        except Exception as e:
-            return f"Error reading blob from URL: {str(e)}"
+    #         return (f"Successfully read blob from URL using Managed Identity.\n"
+    #                f"URL: {blob_url}\n"
+    #                f"Content Type: {content_type}\n"
+    #                f"Size: {size} bytes\n\n"
+    #                f"Content Preview:\n{content_preview}")
+    #     except Exception as e:
+    #         return f"Error reading blob from URL: {str(e)}"
 
 async def main() -> None:
     ai_agent_settings = AzureAIAgentSettings.create()
@@ -374,9 +400,15 @@ async def main() -> None:
             
             When a user wants to translate a video, gather the necessary information:
             1. The URL of the video
-            2. Source language 
-            3. Target language
+            2. Source language
+            3. Target language 
             4. Voice kind (PlatformVoice or PersonalVoice)
+            
+            After submitting a translation request:
+            - Always provide the Translation ID to the user for reference
+            - Explain that the translation process takes time to complete
+            - Tell users they can check the status of their translation using the ID
+            - Share the URLs for the translated video and subtitle files when available
             
             You can also help users:
             - List their translations
@@ -412,14 +444,14 @@ async def main() -> None:
                     break
                 
                 print("Assistant is processing...")
-                # 4. Invoke the agent for the specified thread for response
+                # 4. Invoke the agent for the specified thread for response:
                 async for response in agent.invoke(
                     messages=user_input,
                     thread=thread,
                 ):
                     # Don't print tool messages, only agent responses
-                    if response.name != "Tool":
-                        print(f"\nAssistant: {response}")
+                    #if response.name != "Tool":
+                    print(f"\nAssistant: {response}")
                     thread = response.thread
                     
         finally:
