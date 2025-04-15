@@ -7,12 +7,13 @@ import uuid
 import requests
 import datetime
 import locale
+import os
 import json
 import dataclasses
 from termcolor import colored
 from enum import Enum
 from datetime import datetime, timedelta
-from typing import List, Optional, Any, Union
+from typing import List, Optional, Any, Union, Callable
 from urllib3.util import Url
 from video_translation_const import *
 from video_translation_enum import *
@@ -22,14 +23,9 @@ from urllib.parse import urlencode
 from pydantic import BaseModel
 import time
 import logging
+from azure.core.credentials import TokenCredential
+from azure.identity import DefaultAzureCredential, get_bearer_token_provider
 
-# Import Azure Identity components if available
-try:
-    from azure.core.credentials import TokenCredential
-    from azure.identity import DefaultAzureCredential
-    HAS_AZURE_IDENTITY = True
-except ImportError:
-    HAS_AZURE_IDENTITY = False
 
 class VideoTranslationClient:
     URL_SEGMENT_NAME_TRANSLATIONS = "translations"
@@ -39,28 +35,35 @@ class VideoTranslationClient:
     # Scope for Video Translation API
     VIDEO_TRANSLATION_SCOPE = "https://cognitiveservices.azure.com/.default"
     
-    def __init__(self, region: str, api_version: str, sub_key: str = None, credential: Any = None):
+    def __init__(self, region: str, api_version: str, credential: TokenCredential = None, token_provider: Callable = None):
         """
         Initialize the Video Translation client.
         
         Args:
             region: Azure region (e.g. "eastus")
             api_version: API version to use (e.g. "2024-05-20-preview")
-            sub_key: Optional subscription key for key-based authentication
-            credential: Optional Azure credential for token-based authentication
+            credential: Azure credential for token-based authentication
+            token_provider: Optional token provider function from get_bearer_token_provider
         """
         if region is None:
             raise ValueError("Region must be specified")
         
-        if sub_key is None and credential is None:
-            raise ValueError("Either subscription key or credential must be provided")
+        if credential and not token_provider:
+            token_provider = get_bearer_token_provider(credential, "https://cognitiveservices.azure.com/.default")
+            print("Created token provider from credential")
+        
+        if not credential and not token_provider:
+            credential = DefaultAzureCredential()
+            token_provider = get_bearer_token_provider(credential, "https://cognitiveservices.azure.com/.default")
+            print("No credential provided, using DefaultAzureCredential with token provider")
             
         self.region = region
         self.api_version = api_version
-        self.sub_key = sub_key
         self.credential = credential
+        self.token_provider = token_provider
         self.token = None
         self.token_expiry = None
+        self.resource_id = os.getenv("SPEECH_RESOURCE_ID", "")
         
         # not retry for below response code:
         #   OK = 200,
@@ -87,18 +90,118 @@ class VideoTranslationClient:
         print(f"Region: {region}")
         print(f"API Version: {api_version}")
         print(f"Using Credential: {credential is not None}")
-        print(f"Using Key Authentication: {sub_key is not None}")
+        print(f"Using Token Provider: {token_provider is not None}")
+        print(f"Resource ID Available: {bool(self.resource_id)}")
         print(f"URL_PATH_ROOT: {self.URL_PATH_ROOT}")
         print(f"========================\n")
 
         # Log the authentication method being used
-        if self.credential:
-            print(f"Using token-based authentication for Video Translation client")
-        elif self.sub_key:
-            print(f"Using key-based authentication for Video Translation client")
+        if self.credential and self.token_provider:
+            print(f"Using token provider for Video Translation client authentication")
+        elif self.credential:
+            print(f"Using credential-based authentication for Video Translation client")
+    
+    def get_auth_token(self) -> Optional[str]:
+        """Get an authentication token using the provided credential or token provider"""
+        # If token exists and is not expired, return it
+        current_time = datetime.now()
+        if self.token and self.token_expiry and current_time < self.token_expiry:
+            return self.token
+            
+        # Try using token provider (preferred method)
+        try:
+            if self.token_provider:
+                # Get token using provider function (handles caching)
+                token_response = self.token_provider()
+                
+                if token_response:
+                    print("Successfully acquired token via token provider")
+                    
+                    # Handle both string tokens and token objects
+                    if isinstance(token_response, str):
+                        self.token = token_response
+                        # Set a default expiry time (1 hour) for string tokens
+                        self.token_expiry = current_time + timedelta(hours=1)
+                    else:
+                        self.token = token_response.token
+                        # Set token expiry (subtract 5 minutes for safety margin)
+                        self.token_expiry = current_time + timedelta(minutes=55)
+                    
+                    return self.token
+            # Fall back to direct credential if token provider fails
+            elif self.credential:
+                scope = "https://cognitiveservices.azure.com/.default"
+                access_token = self.credential.get_token(scope)
+                
+                if access_token and access_token.token:
+                    self.token = access_token.token
+                    self.token_expiry = current_time + timedelta(minutes=55)
+                    print("Successfully acquired token via direct credential")
+                    return self.token
+        except Exception as e:
+            print(f"Failed to get authentication token: {str(e)}")
+            
+        return None
+        # try:
+        #     if self.token_provider:
+        #         # Use token provider function which is more efficient
+        #         access_token = self.token_provider()
+                
+        #         if access_token:
+        #             print(f"Successfully acquired token via token provider")
+        #             # Handle both string tokens and token objects
+        #             if isinstance(access_token, str):
+        #                 self.token = access_token
+        #                 # Set a default expiry time (1 hour) for string tokens
+        #                 self.token_expiry = current_time + timedelta(hours=1)
+        #             else:
+        #                 self.token = access_token.token
+        #                 # Set token expiry (subtract 5 minutes for safety margin)
+        #                 self.token_expiry = current_time + timedelta(seconds=access_token.expires_on - 300)
+        #             return self.token
+        #     elif self.credential:
+        #         # Fall back to direct credential usage if token_provider not available
+        #         access_token = self.credential.get_token(self.VIDEO_TRANSLATION_SCOPE)
+                
+        #         if access_token and access_token.token:
+        #             print(f"Successfully acquired token via direct credential")
+        #             self.token = access_token.token
+        #             # Set token expiry (subtract 5 minutes for safety margin)
+        #             self.token_expiry = current_time + timedelta(seconds=access_token.expires_on - 300)
+        #             return self.token
+        #     else:
+        #         print("No credential or token provider available for token acquisition")
+        #         return None
+        # except Exception as e:
+        #     print(f"Failed to get authentication token: {str(e)}")
+        #     return None
+            
+        return None
+    
+    def build_request_header(self) -> dict:
+        """Build the request headers with appropriate authentication"""
+        headers = {"Content-Type": "application/json"}
+        
+        token = self.get_auth_token()
+        if token:
+            if self.resource_id:
+                # Use the resource-specific token format
+                formatted_token = f"aad#{self.resource_id}#{token}"
+                headers["Authorization"] = f"Bearer {formatted_token}"
+                print(f"Using AAD token with resource ID format")
+            else:
+                # Use standard token format
+                headers["Authorization"] = f"Bearer {token}"
+                print("Using standard Bearer token format")
+            # headers["Authorization"] = f"Bearer {token}"
+            # print("Using standard Bearer token format")
+            # return headers
+        else:
+            print("Failed to obtain valid token")
+            raise ValueError("Authentication failed: Unable to obtain a valid token")
+            
+        return headers
 
-    # For most common scenario, customer not need provide webvtt first iteration.
-    # Even, it is supported to provide webvtt for the first iteration, customer can customize the client code if they want to run first iteration with webvtt.
     def create_translate_and_run_first_iteration_until_terminated(
         self,
         video_file_url: Url,
@@ -346,51 +449,6 @@ class VideoTranslationClient:
         path = self.build_iteration_path(translation_id, iteration_id)
         return self.build_url(path)
     
-    def get_auth_token(self) -> Optional[str]:
-        """Get an authentication token using the provided credential"""
-        # If token exists and is not expired, return it
-        current_time = datetime.now()
-        if self.token and self.token_expiry and current_time < self.token_expiry:
-            return self.token
-            
-        # Otherwise, get a new token
-        try:
-            if not self.credential:
-                print("No credential available for token acquisition")
-                return None
-                
-            # Get token with appropriate scope
-            access_token = self.credential.get_token(self.VIDEO_TRANSLATION_SCOPE)
-            
-            if access_token and access_token.token:
-                # Set token and expiry (subtract 5 minutes for safety margin)
-                self.token = access_token.token
-                print(f"Successfully acquired new token (first 10 chars): {self.token[:10]}...")
-                self.token_expiry = current_time + timedelta(seconds=access_token.expires_on - 300)
-                return self.token
-        except Exception as e:
-            print(f"Failed to get authentication token: {str(e)}")
-            return None
-            
-        return None
-    
-    def build_request_header(self) -> dict:
-        """Build the request headers with appropriate authentication"""
-        headers = {}
-        
-        # First try token-based auth if credential is available
-        if self.credential:
-            token = self.get_auth_token()
-            if token:
-                headers["Authorization"] = f"Bearer {token}"
-                return headers
-        
-        # Fall back to subscription key if available
-        if self.sub_key:
-            headers["Ocp-Apim-Subscription-Key"] = self.sub_key
-        
-        return headers
-        
     # https://learn.microsoft.com/en-us/rest/api/aiservices/videotranslation/operation-operations/get-operation?view=rest-aiservices-videotranslation-2024-05-20-preview&tabs=HTTP
     def request_get_operation(self,
                               operation_location: Url,
@@ -596,8 +654,6 @@ class VideoTranslationClient:
         # Handle authentication errors specifically
         if response.status == 401:
             error_message = response.data.decode('utf-8')
-            if "AuthenticationTypeDisabled" in error_message:
-                return False, "Key-based authentication is disabled for this resource. Please use token-based authentication with Azure AD credentials.", None, None
             return False, f"Authentication failed: {error_message}", None, None
         
         #   OK = 200,
@@ -659,8 +715,6 @@ class VideoTranslationClient:
         # Handle authentication errors specifically
         if response.status == 401:
             error_message = response.data.decode('utf-8')
-            if "AuthenticationTypeDisabled" in error_message:
-                return False, "Key-based authentication is disabled for this resource. Please use token-based authentication with Azure AD credentials.", None, None
             return False, f"Authentication failed: {error_message}", None, None
         
         #   OK = 200,

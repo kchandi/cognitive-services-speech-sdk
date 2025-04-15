@@ -4,11 +4,11 @@ import asyncio
 import os
 from typing import Annotated, Optional
 from dotenv import load_dotenv
-import re
 import io
 
-from azure.identity import DefaultAzureCredential, AzureCliCredential
+from azure.identity import DefaultAzureCredential, AzureCliCredential, get_bearer_token_provider
 from azure.identity.aio import DefaultAzureCredential as AsyncDefaultAzureCredential
+from azure.identity import AzureCliCredential
 from azure.storage.blob import BlobServiceClient, BlobClient, ContainerClient
 
 from semantic_kernel.agents import AzureAIAgent, AzureAIAgentSettings
@@ -23,44 +23,73 @@ class VideoTranslationPlugin:
     """A plugin that provides access to video translation capabilities."""
     
     def __init__(self):
-        # Initialize credential for all Azure services including Video Translation
+        print("Initializing VideoTranslationPlugin...")    
         try:
-            # DefaultAzureCredential tries multiple credential sources including Managed Identity
-            self.credential = DefaultAzureCredential()
-            print("Successfully initialized DefaultAzureCredential for Azure services")
+            credential = AzureCliCredential()
             
-            # Initialize client with token-based auth
-            self.client = VideoTranslationClient(
-                region=os.getenv("SPEECH_REGION", ""),
-                api_version=os.getenv("API_VERSION", "2024-05-20-preview"),
-                credential=self.credential  # Pass credential for token-based auth
+            token_provider = get_bearer_token_provider(
+                credential, 
+                "https://cognitiveservices.azure.com/.default"
             )
             
+            self.client = VideoTranslationClient(
+                region=os.getenv("SPEECH_REGION", "westus"),
+                api_version=os.getenv("API_VERSION", "2024-05-20-preview"),
+                credential=credential,
+                token_provider=token_provider
+            )
         except Exception as e:
-            print(f"DefaultAzureCredential failed: {str(e)}")
-            try:
-                # Fall back to CLI credential if available (for local development)
-                self.credential = AzureCliCredential()
-                print("Using AzureCliCredential for Azure services")
+            print(f"Failed to initialize credential or token provider: {str(e)}")
+            # Fall back to default credential
+            self.client = VideoTranslationClient(
+                region=os.getenv("SPEECH_REGION", "westus"),
+                api_version=os.getenv("API_VERSION", "2024-05-20-preview")
+            )
+        # try:
+        #     # DefaultAzureCredential tries multiple credential sources including Managed Identity
+        #     self.credential = DefaultAzureCredential()
+        #     print("Successfully initialized DefaultAzureCredential for Azure services")
+            
+        #     # Get token provider for Speech service authentication
+        #     token_provider = get_bearer_token_provider(
+        #         self.credential, 
+        #         "https://cognitiveservices.azure.com/.default"
+        #     )
+            
+        #     # Initialize client with token-based auth
+        #     self.client = VideoTranslationClient(
+        #         region=os.getenv("SPEECH_REGION", ""),
+        #         api_version=os.getenv("API_VERSION", "2024-05-20-preview"),
+        #         credential=self.credential,  # Pass credential for token-based auth
+        #         token_provider=token_provider  # Pass token provider for Speech service
+        #     )
+            
+        # except Exception as e:
+        #     print(f"DefaultAzureCredential failed: {str(e)}")
+        #     try:
+        #         # Fall back to CLI credential if available (for local development)
+        #         self.credential = AzureCliCredential()
+        #         print("Using AzureCliCredential for Azure services")
                 
-                # Initialize client with CLI credential
-                self.client = VideoTranslationClient(
-                    region=os.getenv("SPEECH_REGION", ""),
-                    api_version=os.getenv("API_VERSION", "2024-05-20-preview"),
-                    credential=self.credential
-                )
-            except Exception as cli_error:
-                print(f"AzureCliCredential failed: {str(cli_error)}")
-                print("WARNING: No valid credential available. Video translation operations may fail.")
-                self.credential = None
+        #         # Get token provider for Speech service authentication
+        #         token_provider = get_bearer_token_provider(
+        #             self.credential, 
+        #             "https://cognitiveservices.azure.com/.default"
+        #         )
                 
-                # Fallback to key-based auth as last resort (though this will likely fail if disabled)
-                self.client = VideoTranslationClient(
-                    region=os.getenv("SPEECH_REGION", ""),
-                    api_version=os.getenv("API_VERSION", "2024-05-20-preview"),
-                    sub_key=os.getenv("SPEECH_KEY", "")
-                )
-                print("WARNING: Using key-based auth which may be disabled for your resource")
+        #         # Initialize client with CLI credential and token provider
+        #         self.client = VideoTranslationClient(
+        #             region=os.getenv("SPEECH_REGION", ""),
+        #             api_version=os.getenv("API_VERSION", "2024-05-20-preview"),
+        #             credential=self.credential,
+        #             token_provider=token_provider
+        #         )
+        #     except Exception as cli_error:
+        #         print(f"AzureCliCredential failed: {str(cli_error)}")
+        #         print("WARNING: No valid credential available. Video translation operations will fail.")
+        #         self.credential = None
+        #         self.client = None  # Don't create client without valid credentials
+        #         print("ERROR: Unable to initialize VideoTranslationClient with token-based auth")
     
     @kernel_function(description="Translates a video file from source language to target language")
     def translate_video(self, 
