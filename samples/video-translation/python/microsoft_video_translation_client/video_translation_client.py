@@ -63,17 +63,7 @@ class VideoTranslationClient:
         self.token_provider = token_provider
         self.token = None
         self.token_expiry = None
-        self.resource_id = os.getenv("SPEECH_RESOURCE_ID", "")
         
-        # not retry for below response code:
-        #   OK = 200,
-        #   Created = 201,
-        #   NoContent = 204,
-        #   BadRequest = 400
-        #   Unauthorized = 401
-        #   Forbidden = 403
-        #   NotFound = 404
-        #   Conflict = 409
         status_forcelist = tuple(set(x for x in requests.status_codes._codes) - set(x for x in [200, 201, 204, 400, 401, 403, 404, 409]))
         retries = urllib3.Retry(total=5, status_forcelist=status_forcelist)
         timeout = urllib3.util.Timeout(10)
@@ -90,8 +80,8 @@ class VideoTranslationClient:
         print(f"Region: {region}")
         print(f"API Version: {api_version}")
         print(f"Using Credential: {credential is not None}")
+        print(f"Using Endpoint: {os.getenv('COGNITIVE_SERVICES_ENDPOINT')}")
         print(f"Using Token Provider: {token_provider is not None}")
-        print(f"Resource ID Available: {bool(self.resource_id)}")
         print(f"URL_PATH_ROOT: {self.URL_PATH_ROOT}")
         print(f"========================\n")
 
@@ -103,21 +93,17 @@ class VideoTranslationClient:
     
     def get_auth_token(self) -> Optional[str]:
         """Get an authentication token using the provided credential or token provider"""
-        # If token exists and is not expired, return it
         current_time = datetime.now()
         if self.token and self.token_expiry and current_time < self.token_expiry:
             return self.token
             
-        # Try using token provider (preferred method)
         try:
             if self.token_provider:
-                # Get token using provider function (handles caching)
                 token_response = self.token_provider()
                 
                 if token_response:
                     print("Successfully acquired token via token provider")
                     
-                    # Handle both string tokens and token objects
                     if isinstance(token_response, str):
                         self.token = token_response
                         # Set a default expiry time (1 hour) for string tokens
@@ -128,7 +114,7 @@ class VideoTranslationClient:
                         self.token_expiry = current_time + timedelta(minutes=55)
                     
                     return self.token
-            # Fall back to direct credential if token provider fails
+
             elif self.credential:
                 scope = "https://cognitiveservices.azure.com/.default"
                 access_token = self.credential.get_token(scope)
@@ -142,41 +128,6 @@ class VideoTranslationClient:
             print(f"Failed to get authentication token: {str(e)}")
             
         return None
-        # try:
-        #     if self.token_provider:
-        #         # Use token provider function which is more efficient
-        #         access_token = self.token_provider()
-                
-        #         if access_token:
-        #             print(f"Successfully acquired token via token provider")
-        #             # Handle both string tokens and token objects
-        #             if isinstance(access_token, str):
-        #                 self.token = access_token
-        #                 # Set a default expiry time (1 hour) for string tokens
-        #                 self.token_expiry = current_time + timedelta(hours=1)
-        #             else:
-        #                 self.token = access_token.token
-        #                 # Set token expiry (subtract 5 minutes for safety margin)
-        #                 self.token_expiry = current_time + timedelta(seconds=access_token.expires_on - 300)
-        #             return self.token
-        #     elif self.credential:
-        #         # Fall back to direct credential usage if token_provider not available
-        #         access_token = self.credential.get_token(self.VIDEO_TRANSLATION_SCOPE)
-                
-        #         if access_token and access_token.token:
-        #             print(f"Successfully acquired token via direct credential")
-        #             self.token = access_token.token
-        #             # Set token expiry (subtract 5 minutes for safety margin)
-        #             self.token_expiry = current_time + timedelta(seconds=access_token.expires_on - 300)
-        #             return self.token
-        #     else:
-        #         print("No credential or token provider available for token acquisition")
-        #         return None
-        # except Exception as e:
-        #     print(f"Failed to get authentication token: {str(e)}")
-        #     return None
-            
-        return None
     
     def build_request_header(self) -> dict:
         """Build the request headers with appropriate authentication"""
@@ -184,33 +135,22 @@ class VideoTranslationClient:
         
         token = self.get_auth_token()
         if token:
-            if self.resource_id:
-                # Use the resource-specific token format
-                formatted_token = f"aad#{self.resource_id}#{token}"
-                headers["Authorization"] = f"Bearer {formatted_token}"
-                print(f"Using AAD token with resource ID format")
-            else:
-                # Use standard token format
-                headers["Authorization"] = f"Bearer {token}"
-                print("Using standard Bearer token format")
-            # headers["Authorization"] = f"Bearer {token}"
-            # print("Using standard Bearer token format")
-            # return headers
+            headers["Authorization"] = f"Bearer {token}"
+            print("Using standard Bearer token format")
+            return headers
         else:
             print("Failed to obtain valid token")
             raise ValueError("Authentication failed: Unable to obtain a valid token")
             
-        return headers
-
     def create_translate_and_run_first_iteration_until_terminated(
         self,
         video_file_url: Url,
         source_locale: locale,
         target_locale: locale,
         voice_kind: VoiceKind,
-        speaker_count: int = None,
-        subtitle_max_char_count_per_segment: int = None,
-        export_subtitle_in_video: bool = None
+        speaker_count: int = 1,
+        subtitle_max_char_count_per_segment: int = 32,
+        export_subtitle_in_video: bool = False
     ) -> tuple[bool, str, TranslationDefinition, IterationDefinition]:
         if video_file_url is None or source_locale is None or target_locale is None or voice_kind is None:
             raise ValueError
@@ -256,9 +196,9 @@ class VideoTranslationClient:
         translation_id: str,
         webvtt_file_kind: WebvttFileKind,
         webvtt_file_url: Url,
-        speaker_count: int = None,
-        subtitle_max_char_count_per_segment: int = None,
-        export_subtitle_in_video: bool = None
+        speaker_count: int = 1,
+        subtitle_max_char_count_per_segment: int = 32,
+        export_subtitle_in_video: bool = False
     ) -> tuple[bool, str, TranslationDefinition, IterationDefinition]:
         if webvtt_file_kind is None or webvtt_file_url is None:
             raise ValueError
@@ -303,11 +243,11 @@ class VideoTranslationClient:
             source_locale = source_locale,
             target_locale = target_locale,
             voice_kind = voice_kind,
-            speaker_count = None,
-            subtitle_max_char_count_per_segment = None,
-            export_subtitle_in_video = None,
-            translation_display_name = None,
-            translation_description = None,
+            speaker_count = 1,
+            subtitle_max_char_count_per_segment = 32,
+            export_subtitle_in_video = False,
+            # translation_display_name = None,
+            # translation_description = None,
             operation_id = operation_id)
         if not success or operation_location is None:
             print(colored(f"Failed to create translation with ID {translation_id} with error: {error}", 'red'))
@@ -413,15 +353,18 @@ class VideoTranslationClient:
         iterations_path = self.build_iterations_path(translation_id)
         return f"{iterations_path}/{iteration_id}"
     
-    def build_host(self) -> str:
-        return f"{self.region}.api.cognitive.microsoft.com"
+    def build_endpoint(self) -> str:
+        endpoint = os.getenv("COGNITIVE_SERVICES_ENDPOINT")
+        if not endpoint:
+            raise ValueError("Video Translation endpoint environment variable was not provided")
+        return endpoint
 
     def build_url(self,
                   segments: str) -> Url:
         if segments is None:
             raise ValueError
-        host = self.build_host()
-        return urllib3.util.parse_url(f"https://{host}/{segments}?api-version={self.api_version}")
+        endpoint = self.build_endpoint()
+        return urllib3.util.parse_url(f"https://{endpoint}/{segments}?api-version={self.api_version}")
 
     def build_translations_url(self) -> Url:
         path = self.build_translations_path()
@@ -591,6 +534,21 @@ class VideoTranslationClient:
             return False, error
         return True, None
         
+    def generate_operation_id(self) -> str:
+        """
+        Generates a valid operation ID that meets API requirements:
+        - Between 3-64 characters
+        - Starts and ends with alphanumeric character
+        - Contains only alphanumeric characters, period, underscore, or hyphen
+        
+        Returns:
+            A valid operation ID string
+        """
+        # Create a clean UUID-based operation ID without dashes
+        uuid_str = str(uuid.uuid4()).replace('-', '')
+        # Prefix with "op" to ensure it starts with a letter
+        return f"op{uuid_str}"[:64]  # Trim to max 64 chars if needed
+    
     # https://learn.microsoft.com/en-us/rest/api/aiservices/videotranslation/translation-operations/create-translation?view=rest-aiservices-videotranslation-2024-05-20-preview&tabs=HTTP
     def request_create_translation(
             self,
@@ -599,9 +557,9 @@ class VideoTranslationClient:
             source_locale: locale,
             target_locale: locale,
             voice_kind: VoiceKind,
-            speaker_count: int = None,
-            subtitle_max_char_count_per_segment: int = None,
-            export_subtitle_in_video: bool = None,
+            speaker_count: int = 1,
+            subtitle_max_char_count_per_segment: int = 32,
+            export_subtitle_in_video: bool = False,
             translation_display_name: str = None,
             translation_description: str = None,
             operation_id: str = None,
@@ -609,27 +567,44 @@ class VideoTranslationClient:
         if translation_id is None or video_file_url is None or source_locale is None or target_locale is None or voice_kind is None:
             raise ValueError
 
-        translation_create_input_body = TranslationInputDefinition(
-            sourceLocale = source_locale,
-            targetLocale = target_locale,
-            voiceKind = voice_kind,
-            videoFileUrl=video_file_url,
-            speakerCount =speaker_count,
-            subtitleMaxCharCountPerSegment = subtitle_max_char_count_per_segment,
-            exportSubtitleInVideo = export_subtitle_in_video,
-        )
+        if not operation_id:
+            operation_id = self.generate_operation_id()
+
+        input_body = {
+            "sourceLocale": source_locale,
+            "targetLocale": target_locale,
+            "voiceKind": voice_kind.value,
+            "videoFileUrl": video_file_url
+        }
+
+        if speaker_count is not None:
+            input_body["speakerCount"] = speaker_count
+
+        if subtitle_max_char_count_per_segment is not None:
+            input_body["subtitleMaxCharCountPerSegment"] = subtitle_max_char_count_per_segment
+            
+        if export_subtitle_in_video is not None:
+            input_body["exportSubtitleInVideo"] = export_subtitle_in_video
+    
+            
+        translation_create_body = {
+            "input": input_body
+        }
         
-        translation_create_body = TranslationDefinition(
-            input = translation_create_input_body,
-            displayName = translation_display_name,
-            description = translation_description,
-        )
-        
-        encoded_translation_create_body = orjson.dumps(dataclasses.asdict(translation_create_body))
+        # Add optional fields only if they are provided
+        if translation_display_name:
+            translation_create_body["displayName"] = translation_display_name
+            
+        if translation_description:
+            translation_create_body["description"] = translation_description
+                    
+        encoded_translation_create_body = orjson.dumps(translation_create_body)
         
         url = self.build_translation_url(translation_id)
         headers = self.build_request_header()
+        
         headers["Operation-Id"] = operation_id
+        print(f"Using Operation-Id: {operation_id}")
 
         print("\n=== DETAILED REQUEST LOGGING ===")
         print(f"Full Request URL: {url.url}")
@@ -685,6 +660,10 @@ class VideoTranslationClient:
         if translation_id is None or iteration_id is None:
             raise ValueError
 
+        # Always generate a new operation ID
+        if not operation_id:
+            operation_id = self.generate_operation_id()
+
         translation_create_input_body = IterationInputDefinition(
             speakerCount = speaker_count,
             exportSubtitleInVideo = export_subtitle_in_video,
@@ -708,6 +687,7 @@ class VideoTranslationClient:
             operation_id = str(uuid.uuid4())
         headers = self.build_request_header()
         headers["Operation-Id"] = operation_id
+        print(f"Using Operation-Id: {operation_id}")
         
         print(f"Requesting http PUT: {url}")
         response = self.http.request("PUT", url.url, headers = headers, body=encoded_iteration_create_body)
