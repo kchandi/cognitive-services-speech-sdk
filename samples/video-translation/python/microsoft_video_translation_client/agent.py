@@ -33,7 +33,6 @@ class VideoTranslationPlugin:
             )
             
             self.client = VideoTranslationClient(
-                region=os.getenv("SPEECH_REGION", "westus"),
                 api_version=os.getenv("API_VERSION", "2024-05-20-preview"),
                 credential=credential,
                 token_provider=token_provider
@@ -42,7 +41,6 @@ class VideoTranslationPlugin:
             print(f"Failed to initialize credential or token provider: {str(e)}")
             # Fall back to default credential
             self.client = VideoTranslationClient(
-                region=os.getenv("SPEECH_REGION", "westus"),
                 api_version=os.getenv("API_VERSION", "2024-05-20-preview")
             )
     
@@ -76,8 +74,9 @@ class VideoTranslationPlugin:
             
             if success:
                 translation_id = translation.id
+                iteration_id = iteration.id
                 
-                return f"Translation successful! Translation ID: {translation_id} Result translation:{translation_info} Result iteration:{iteration_info}"
+                return f"Translation successful! Translation ID:{translation_id} Result translation:{translation_info} Iteration ID:{iteration_id} Result iteration:{iteration_info}"
             else:
                 return f"Translation failed: {error}"
         except Exception as e:
@@ -301,11 +300,10 @@ async def main() -> None:
             - Share the URLs for the translated video and subtitle files when available
             
             You can also help users:
-            - List their translations
+            - List their translations (It might be helpful to ask if they want to see all translations, a specific number of translations, or translations with a specific criteria)
             - Get details about specific translations
             - Create iterations with WebVTT files
             - Delete translations
-            - Test storage access if needed
             
             Be friendly, helpful, and guide users through the process.
             """,

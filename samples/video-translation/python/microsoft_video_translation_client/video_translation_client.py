@@ -32,19 +32,15 @@ class VideoTranslationClient:
     # Scope for Video Translation API
     VIDEO_TRANSLATION_SCOPE = "https://cognitiveservices.azure.com/.default"
     
-    def __init__(self, region: str, api_version: str, credential: TokenCredential = None, token_provider: Callable = None):
+    def __init__(self: str, api_version: str, credential: TokenCredential = None, token_provider: Callable = None):
         """
         Initialize the Video Translation client.
         
         Args:
-            region: Azure region (e.g. "eastus")
             api_version: API version to use (e.g. "2024-05-20-preview")
             credential: Azure credential for token-based authentication
             token_provider: Optional token provider function from get_bearer_token_provider
         """
-        if region is None:
-            raise ValueError("Region must be specified")
-        
         if credential and not token_provider:
             token_provider = get_bearer_token_provider(credential, "https://cognitiveservices.azure.com/.default")
             print("Created token provider from credential")
@@ -54,7 +50,6 @@ class VideoTranslationClient:
             token_provider = get_bearer_token_provider(credential, "https://cognitiveservices.azure.com/.default")
             print("No credential provided, using DefaultAzureCredential with token provider")
             
-        self.region = region
         self.api_version = api_version
         self.credential = credential
         self.token_provider = token_provider
@@ -67,14 +62,13 @@ class VideoTranslationClient:
         self.http = urllib3.PoolManager(timeout=timeout, retries=retries)
         
         # Setup HTTP transport with debug logger
-        logging.basicConfig(level=logging.DEBUG)
-        http_logger = logging.getLogger("urllib3")
-        http_logger.setLevel(logging.DEBUG)
-        http_logger.propagate = True
+        # logging.basicConfig(level=logging.DEBUG)
+        # http_logger = logging.getLogger("urllib3")
+        # http_logger.setLevel(logging.DEBUG)
+        # http_logger.propagate = True
         
         # Log connection parameters
         print(f"\n=== CONNECTION SETUP ===")
-        print(f"Region: {region}")
         print(f"API Version: {api_version}")
         print(f"Using Credential: {credential is not None}")
         print(f"Using Endpoint: {os.getenv('COGNITIVE_SERVICES_ENDPOINT')}")
@@ -83,10 +77,10 @@ class VideoTranslationClient:
         print(f"========================\n")
 
         # Log the authentication method being used
-        if self.credential and self.token_provider:
-            print(f"Using token provider for Video Translation client authentication")
-        elif self.credential:
-            print(f"Using credential-based authentication for Video Translation client")
+        # if self.credential and self.token_provider:
+        #     print(f"Using token provider for Video Translation client authentication")
+        # elif self.credential:
+        #     print(f"Using credential-based authentication for Video Translation client")
     
     def get_auth_token(self) -> Optional[str]:
         """Get an authentication token using the provided credential or token provider"""
@@ -133,7 +127,6 @@ class VideoTranslationClient:
         token = self.get_auth_token()
         if token:
             headers["Authorization"] = f"Bearer {token}"
-            print("Using standard Bearer token format")
             return headers
         else:
             print("Failed to obtain valid token")
@@ -168,7 +161,7 @@ class VideoTranslationClient:
         
         print(colored("successfully created translation:", 'green'))
         translation_json_formatted_str = json.dumps(dataclasses.asdict(translation), indent = 2)
-        print(translation_json_formatted_str)
+        # print(translation_json_formatted_str)
 
         iteration_id = f"{nowString}_default"
         success, error, iteration = self.create_iteration_until_terminated(
@@ -183,7 +176,7 @@ class VideoTranslationClient:
         
         print(colored("successfully created iteration:", 'green'))
         iteration_json_formatted_str = json.dumps(dataclasses.asdict(iteration), indent = 2)
-        print(iteration_json_formatted_str)
+        # print(iteration_json_formatted_str)
 
         return True, None, translation, iteration, translation_json_formatted_str, iteration_json_formatted_str
     
@@ -596,27 +589,26 @@ class VideoTranslationClient:
         headers = self.build_request_header()
         
         headers["Operation-Id"] = operation_id
-        print(f"Using Operation-Id: {operation_id}")
+        # print(f"Using Operation-Id: {operation_id}")
 
-        print("\n=== DETAILED REQUEST LOGGING ===")
-        print(f"Full Request URL: {url.url}")
-        print(f"Request Headers: {json.dumps(headers, indent=2)}")
-        print(f"Request Body: {encoded_translation_create_body.decode('utf-8')}")
-        print(f"Base URL Path: {self.URL_PATH_ROOT}")
-        print(f"Translation ID: {translation_id}")
-        print(f"Region: {self.region}")
-        print(f"API Version: {self.api_version}")
-        print("==============================\n")
+        # print("\n=== DETAILED REQUEST LOGGING ===")
+        # print(f"Full Request URL: {url.url}")
+        # print(f"Request Headers: {json.dumps(headers, indent=2)}")
+        # print(f"Request Body: {encoded_translation_create_body.decode('utf-8')}")
+        # print(f"Base URL Path: {self.URL_PATH_ROOT}")
+        # print(f"Translation ID: {translation_id}")
+        # print(f"API Version: {self.api_version}")
+        # print("==============================\n")
             
-        print(f"Requesting http PUT: {url}")
+        # print(f"Requesting http PUT: {url}")
         response = self.http.request("PUT", url.url, headers = headers, body=encoded_translation_create_body)
         
-        # Add response logging
-        print("\n=== DETAILED RESPONSE LOGGING ===")
-        print(f"Response Status: {response.status}")
-        print(f"Response Headers: {json.dumps(dict(response.headers), indent=2)}")
-        print(f"Response Body: {response.data.decode('utf-8')}")
-        print("==============================\n")
+        # # Add response logging
+        # print("\n=== DETAILED RESPONSE LOGGING ===")
+        # print(f"Response Status: {response.status}")
+        # print(f"Response Headers: {json.dumps(dict(response.headers), indent=2)}")
+        # print(f"Response Body: {response.data.decode('utf-8')}")
+        # print("==============================\n")
         
         # Handle authentication errors specifically
         if response.status == 401:
@@ -652,7 +644,6 @@ class VideoTranslationClient:
         if translation_id is None or iteration_id is None:
             raise ValueError
 
-        # Always generate a new operation ID
         if not operation_id:
             operation_id = self.generate_operation_id()
 
@@ -679,7 +670,7 @@ class VideoTranslationClient:
             operation_id = str(uuid.uuid4())
         headers = self.build_request_header()
         headers["Operation-Id"] = operation_id
-        print(f"Using Operation-Id: {operation_id}")
+        # print(f"Using Operation-Id: {operation_id}")
         
         print(f"Requesting http PUT: {url}")
         response = self.http.request("PUT", url.url, headers = headers, body=encoded_iteration_create_body)
