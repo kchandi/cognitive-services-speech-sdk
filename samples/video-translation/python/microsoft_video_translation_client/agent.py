@@ -2,14 +2,17 @@
 
 import asyncio
 import os
+import traceback
 from typing import Annotated, Optional
 from dotenv import load_dotenv
+from datetime import datetime, timedelta
 import io
 
 from azure.identity import AzureCliCredential, get_bearer_token_provider
 from azure.identity.aio import DefaultAzureCredential as AsyncDefaultAzureCredential
+from azure.identity.aio import DefaultAzureCredential
 from azure.identity import AzureCliCredential
-from azure.storage.blob import ContainerClient
+from azure.storage.blob import BlobServiceClient, BlobClient, ContainerClient, generate_blob_sas, BlobSasPermissions
 
 from semantic_kernel.agents import AzureAIAgent, AzureAIAgentSettings
 from semantic_kernel.functions import kernel_function
@@ -145,21 +148,6 @@ class VideoTranslationPlugin:
             success, error, translation = self.client.request_get_translation(translation_id=translation_id)
             
             if success and translation:
-                # result = f"Translation ID: {translation.id}\n"
-                # result += f"Status: {translation.status}\n"
-                # result += f"Created: {translation.createdDateTime}\n"
-                # result += f"Last Action: {translation.lastActionDateTime}\n"
-                # result += f"Source: {translation.input.sourceLocale} → Target: {translation.input.targetLocale}\n"
-                # result += f"Voice Kind: {translation.input.voiceKind}\n"
-                
-                # if translation.latestSucceededIteration and translation.latestSucceededIteration.result:
-                #     iter_result = translation.latestSucceededIteration.result
-                #     result += "\nLatest successful iteration results:\n"
-                #     if iter_result.translatedVideoFileUrl:
-                #         result += f"Translated Video: {iter_result.translatedVideoFileUrl}\n"
-                #     if iter_result.targetLocaleSubtitleWebvttFileUrl:
-                #         result += f"Target Subtitles: {iter_result.targetLocaleSubtitleWebvttFileUrl}\n"
-                
                 return translation
             else:
                 return f"Translation not found or error: {error}"
@@ -179,91 +167,81 @@ class VideoTranslationPlugin:
         except Exception as e:
             return f"An error occurred while deleting the translation: {str(e)}"
 
-    @kernel_function(description="Uploads content to Azure Blob Storage using Managed Identity")
-    def upload_to_storage(self, 
-                         account_name: Annotated[str, "The storage account name"],
-                         container_name: Annotated[str, "The container name"],
-                         blob_name: Annotated[str, "The name to give the uploaded blob"],
-                         content: Annotated[str, "The text content to upload"]
-                        ) -> Annotated[str, "Returns the status of the upload operation"]:
-        """Uploads a video to Azure Blob Storage using Managed Identity."""
+    @kernel_function(description="Uploads a local file to Azure Blob Storage")
+    async def upload_to_azure_blob(self, local_file_path, container_name, blob_name):
+        """Uploads a local video file to Azure Blob Storage"""
         try:
-            if not self.credential:
-                return "No valid credential available for storage access."
+            from azure.identity.aio import DefaultAzureCredential
+            from azure.storage.blob.aio import BlobServiceClient
+            from azure.storage.blob import generate_blob_sas, BlobSasPermissions
+            from azure.core.credentials import AzureSasCredential
+            from datetime import datetime, timedelta
             
-            container_endpoint = f"https://{account_name}.blob.core.windows.net/{container_name}"
+            # Get environment variables
+            storage_account_name = os.getenv('AZURE_STORAGE_ACCOUNT_NAME')
+            account_url = f"https://{storage_account_name}.blob.core.windows.net"
             
-            container_client = ContainerClient(
-                endpoint=container_endpoint,
-                credential=self.credential
-            )
+            print(f"Uploading {local_file_path} to {container_name}/{blob_name}")
             
-            try:
-                container_client.create_if_not_exists()
-                
-                content_bytes = content.encode('utf-8')
-                
-                blob_client = container_client.get_blob_client(blob_name)
-                with io.BytesIO(content_bytes) as data:
-                    blob_client.upload_blob(data, overwrite=True)
-                
-                blob_url = f"https://{account_name}.blob.core.windows.net/{container_name}/{blob_name}"
-                
-                return f"Successfully uploaded content to blob storage:\nURL: {blob_url}"
-            except Exception as e:
-                return f"Error during blob upload operation: {str(e)}\n\nThis may indicate that the Managed Identity does not have sufficient RBAC permissions (like Storage Blob Data Contributor) on this storage account."
+            # Create the blob URL beforehand (we'll use it later)
+            blob_url = f"https://{storage_account_name}.blob.core.windows.net/{container_name}/{blob_name}"
+            
+            # Create async credentials and client
+            async with DefaultAzureCredential() as credential:
+                async with BlobServiceClient(account_url, credential=credential) as blob_service_client:
+                    # Get container client
+                    container_client = blob_service_client.get_container_client(container_name)
+                    
+                    # Create container if it doesn't exist
+                    try:
+                        await container_client.create_container()
+                        print(f"Container {container_name} created")
+                    except Exception as e:
+                        print(f"Container exists or error: {str(e)}")
+                    
+                    # Get blob client and upload file
+                    blob_client = container_client.get_blob_client(blob_name)
+                    with open(file=local_file_path, mode="rb") as data:
+                        await blob_client.upload_blob(data=data, overwrite=True)
+                    
+                    print(f"File {local_file_path} uploaded to {container_name}/{blob_name}")
+                    
+                    # Get user delegation key for SAS generation
+                    start_time = datetime.now()
+                    expiry_time = start_time + timedelta(hours=24)
+                    
+                    try:
+                        # Get user delegation key (requires appropriate permissions)
+                        user_delegation_key = await blob_service_client.get_user_delegation_key(
+                            key_start_time=start_time,
+                            key_expiry_time=expiry_time
+                        )
+                        
+                        # Generate SAS token with read permissions using user delegation key
+                        sas_token = generate_blob_sas(
+                            account_name=storage_account_name,
+                            container_name=container_name,
+                            blob_name=blob_name,
+                            user_delegation_key=user_delegation_key,
+                            permission=BlobSasPermissions(read=True),
+                            expiry=expiry_time
+                        )
+                        
+                        # Create URL with SAS token
+                        sas_url = f"{blob_url}?{sas_token}"
+                        print(f"SAS URL generated (valid for 24 hours)")
+                        
+                        return f"File uploaded successfully! \nAccess URL: {blob_url} \nSecure access URL (valid for 24 hours): {sas_url}"
+                    except Exception as e:
+                        print(f"Failed to generate SAS token: {str(e)}")
+                        # If we can't generate a SAS token, return just the blob URL
+                        return f"File uploaded successfully! \nAccess URL: {blob_url} \nNote: Could not generate a secure access URL. Error: {str(e)}"
+        
         except Exception as e:
-            return f"Error initializing storage client: {str(e)}"
-    
-    @kernel_function(description="Downloads content from Azure Blob Storage using Managed Identity")
-    def download_from_storage(self,
-                             account_name: Annotated[str, "The storage account name"],
-                             container_name: Annotated[str, "The container name"],
-                             blob_name: Annotated[str, "The name of the blob to download"]
-                            ) -> Annotated[str, "Returns the blob content or error message"]:
-        """Downloads text content from Azure Blob Storage using Managed Identity."""
-        try:
-            # Log the storage parameters being used
-            print(f"Downloading from storage with parameters:")
-            print(f"  Account name: {account_name}")
-            print(f"  Container name: {container_name}")
-            print(f"  Blob name: {blob_name}")
-            
-            if not self.credential:
-                return "No valid credential available for storage access."
-            
-            container_endpoint = f"https://{account_name}.blob.core.windows.net/{container_name}"
-            
-            
-            container_client = ContainerClient(
-                endpoint=container_endpoint,
-                credential=self.credential
-            )
-            
-            try:
-                blob_client = container_client.get_blob_client(blob_name)
-                
-                if not blob_client.exists():
-                    return f"Error: Blob '{blob_name}' does not exist in container '{container_name}'."
-                
-                download_stream = blob_client.download_blob()
-                content = download_stream.readall().decode('utf-8')
-                
-                properties = blob_client.get_blob_properties()
-                content_type = properties.content_settings.content_type
-                size = properties.size
-                
-                content_preview = content[:1000] + "..." if len(content) > 1000 else content
-                
-                return (f"Successfully downloaded blob content using Managed Identity.\n"
-                        f"Blob: {blob_name}\n"
-                        f"Content Type: {content_type}\n"
-                        f"Size: {size} bytes\n\n"
-                        f"Content Preview:\n{content_preview}")
-            except Exception as e:
-                return f"Error downloading blob content: {str(e)}\n\nThis may indicate that the Managed Identity does not have sufficient RBAC permissions (like Storage Blob Data Reader) on this storage account."
-        except Exception as e:
-             return f"Error initializing storage client: {str(e)}"
+            import traceback
+            print(f"Error in upload_to_azure_blob: {str(e)}")
+            print(traceback.format_exc())
+            return f"Error uploading file: {str(e)}"
         
 async def main() -> None:
     ai_agent_settings = AzureAIAgentSettings.create()
@@ -300,6 +278,7 @@ async def main() -> None:
             - Get details about specific translations
             - Create iterations with WebVTT files
             - Delete translations
+            - Upload local files to Azure Blob Storage
             
             Be friendly, helpful, and guide users through the process.
             """,
