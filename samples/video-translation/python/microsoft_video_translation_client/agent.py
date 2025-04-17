@@ -56,10 +56,6 @@ class VideoTranslationPlugin:
                       ) -> Annotated[str, "Returns the status of the translation request"]:
         """Translates a video from source language to target language."""
         try:
-
-            speaker_count_int = int(speaker_count) if speaker_count else 1
-            subtitle_max_char_count_int = int(subtitle_max_char_count) if subtitle_max_char_count else 32
-
             voice_kind_enum = VoiceKind.PlatformVoice if voice_kind == "PlatformVoice" else VoiceKind.PersonalVoice
             
             success, error, translation, iteration, translation_info, iteration_info = self.client.create_translate_and_run_first_iteration_until_terminated(
@@ -67,8 +63,8 @@ class VideoTranslationPlugin:
                 source_locale=source_locale,
                 target_locale=target_locale,
                 voice_kind=voice_kind_enum,
-                speaker_count=speaker_count_int,
-                subtitle_max_char_count_per_segment=subtitle_max_char_count_int,
+                speaker_count=speaker_count,
+                subtitle_max_char_count_per_segment=subtitle_max_char_count,
                 export_subtitle_in_video=export_subtitle_in_video
             )
             
@@ -190,7 +186,7 @@ class VideoTranslationPlugin:
                          blob_name: Annotated[str, "The name to give the uploaded blob"],
                          content: Annotated[str, "The text content to upload"]
                         ) -> Annotated[str, "Returns the status of the upload operation"]:
-        """Uploads text content to Azure Blob Storage using Managed Identity."""
+        """Uploads a video to Azure Blob Storage using Managed Identity."""
         try:
             if not self.credential:
                 return "No valid credential available for storage access."

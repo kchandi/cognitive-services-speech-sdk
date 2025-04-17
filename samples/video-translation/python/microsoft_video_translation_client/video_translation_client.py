@@ -13,7 +13,7 @@ import dataclasses
 from termcolor import colored
 from enum import Enum
 from datetime import datetime, timedelta
-from typing import List, Optional, Any, Union, Callable
+from typing import Optional, Callable
 from urllib3.util import Url
 from video_translation_const import *
 from video_translation_enum import *
@@ -75,12 +75,6 @@ class VideoTranslationClient:
         print(f"Using Token Provider: {token_provider is not None}")
         print(f"URL_PATH_ROOT: {self.URL_PATH_ROOT}")
         print(f"========================\n")
-
-        # Log the authentication method being used
-        # if self.credential and self.token_provider:
-        #     print(f"Using token provider for Video Translation client authentication")
-        # elif self.credential:
-        #     print(f"Using credential-based authentication for Video Translation client")
     
     def get_auth_token(self) -> Optional[str]:
         """Get an authentication token using the provided credential or token provider"""
@@ -93,7 +87,7 @@ class VideoTranslationClient:
                 token_response = self.token_provider()
                 
                 if token_response:
-                    print("Successfully acquired token via token provider")
+                    # print("Successfully acquired token via token provider")
                     
                     if isinstance(token_response, str):
                         self.token = token_response
@@ -113,7 +107,7 @@ class VideoTranslationClient:
                 if access_token and access_token.token:
                     self.token = access_token.token
                     self.token_expiry = current_time + timedelta(minutes=55)
-                    print("Successfully acquired token via direct credential")
+                    # print("Successfully acquired token via direct credential")
                     return self.token
         except Exception as e:
             print(f"Failed to get authentication token: {str(e)}")
@@ -159,7 +153,7 @@ class VideoTranslationClient:
         if not success:
             return False, error, None, None
         
-        print(colored("successfully created translation:", 'green'))
+        # print(colored("successfully created translation:", 'green'))
         translation_json_formatted_str = json.dumps(dataclasses.asdict(translation), indent = 2)
         # print(translation_json_formatted_str)
 
@@ -174,7 +168,7 @@ class VideoTranslationClient:
         if not success:
             return False, error, None, None
         
-        print(colored("successfully created iteration:", 'green'))
+        # print(colored("successfully created iteration:", 'green'))
         iteration_json_formatted_str = json.dumps(dataclasses.asdict(iteration), indent = 2)
         # print(iteration_json_formatted_str)
 
