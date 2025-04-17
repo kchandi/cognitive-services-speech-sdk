@@ -9,6 +9,7 @@ class VoiceKind(str, Enum):
 
 class Region(str, Enum):
     eastus = 'eastus'
+    westus = 'westus'
 
 class OneApiState(str, Enum):
     NotStarted = 'NotStarted'

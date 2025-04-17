@@ -19,13 +19,10 @@ from video_translation_const import *
 from video_translation_enum import *
 from video_translation_dataclass import *
 from video_translation_util import *
-from urllib.parse import urlencode
-from pydantic import BaseModel
 import time
 import logging
 from azure.core.credentials import TokenCredential
 from azure.identity import DefaultAzureCredential, get_bearer_token_provider
-
 
 class VideoTranslationClient:
     URL_SEGMENT_NAME_TRANSLATIONS = "translations"
@@ -169,9 +166,9 @@ class VideoTranslationClient:
         if not success:
             return False, error, None, None
         
-        print(colored("succesfully created translation:", 'green'))
-        json_formatted_str = json.dumps(dataclasses.asdict(translation), indent = 2)
-        print(json_formatted_str)
+        print(colored("successfully created translation:", 'green'))
+        translation_json_formatted_str = json.dumps(dataclasses.asdict(translation), indent = 2)
+        print(translation_json_formatted_str)
 
         iteration_id = f"{nowString}_default"
         success, error, iteration = self.create_iteration_until_terminated(
@@ -184,11 +181,11 @@ class VideoTranslationClient:
         if not success:
             return False, error, None, None
         
-        print(colored("succesfully created iteration:", 'green'))
-        json_formatted_str = json.dumps(dataclasses.asdict(iteration), indent = 2)
-        print(json_formatted_str)
+        print(colored("successfully created iteration:", 'green'))
+        iteration_json_formatted_str = json.dumps(dataclasses.asdict(iteration), indent = 2)
+        print(iteration_json_formatted_str)
 
-        return True, None, translation, iteration
+        return True, None, translation, iteration, translation_json_formatted_str, iteration_json_formatted_str
     
     # For iteration from secondary, webvtt file is required.
     def run_iteration_with_webvtt_until_terminated(
@@ -496,10 +493,8 @@ class VideoTranslationClient:
             error = response.data.decode('utf-8')
             return False, error, None
         response_translations_json = response.json()
-        response_translations = dict_to_dataclass(
-            data = response_translations_json,
-            dataclass_type = PagedTranslationDefinition)
-        return True, None, response_translations
+        
+        return True, None, response_translations_json
     
     # https://learn.microsoft.com/en-us/rest/api/aiservices/videotranslation/iteration-operations/list-iteration?view=rest-aiservices-videotranslation-2024-05-20-preview&tabs=HTTP
     def request_list_iterations(self) -> tuple[bool, str, PagedIterationDefinition]:
@@ -514,10 +509,7 @@ class VideoTranslationClient:
             error = response.data.decode('utf-8')
             return False, error, None
         response_iterations_json = response.json()
-        response_iterations = dict_to_dataclass(
-            data = response_iterations_json,
-            dataclass_type = PagedIterationDefinition)
-        return True, None, response_iterations
+        return True, None, response_iterations_json
     
     # https://learn.microsoft.com/en-us/rest/api/aiservices/videotranslation/translation-operations/delete-translation?view=rest-aiservices-videotranslation-2024-05-20-preview&tabs=HTTP
     def request_delete_translation(self,

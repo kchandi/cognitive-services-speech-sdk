@@ -6,10 +6,10 @@ from typing import Annotated, Optional
 from dotenv import load_dotenv
 import io
 
-from azure.identity import DefaultAzureCredential, AzureCliCredential, get_bearer_token_provider
+from azure.identity import AzureCliCredential, get_bearer_token_provider
 from azure.identity.aio import DefaultAzureCredential as AsyncDefaultAzureCredential
 from azure.identity import AzureCliCredential
-from azure.storage.blob import BlobServiceClient, BlobClient, ContainerClient
+from azure.storage.blob import ContainerClient
 
 from semantic_kernel.agents import AzureAIAgent, AzureAIAgentSettings
 from semantic_kernel.functions import kernel_function
@@ -45,51 +45,6 @@ class VideoTranslationPlugin:
                 region=os.getenv("SPEECH_REGION", "westus"),
                 api_version=os.getenv("API_VERSION", "2024-05-20-preview")
             )
-        # try:
-        #     # DefaultAzureCredential tries multiple credential sources including Managed Identity
-        #     self.credential = DefaultAzureCredential()
-        #     print("Successfully initialized DefaultAzureCredential for Azure services")
-            
-        #     # Get token provider for Speech service authentication
-        #     token_provider = get_bearer_token_provider(
-        #         self.credential, 
-        #         "https://cognitiveservices.azure.com/.default"
-        #     )
-            
-        #     # Initialize client with token-based auth
-        #     self.client = VideoTranslationClient(
-        #         region=os.getenv("SPEECH_REGION", ""),
-        #         api_version=os.getenv("API_VERSION", "2024-05-20-preview"),
-        #         credential=self.credential,  # Pass credential for token-based auth
-        #         token_provider=token_provider  # Pass token provider for Speech service
-        #     )
-            
-        # except Exception as e:
-        #     print(f"DefaultAzureCredential failed: {str(e)}")
-        #     try:
-        #         # Fall back to CLI credential if available (for local development)
-        #         self.credential = AzureCliCredential()
-        #         print("Using AzureCliCredential for Azure services")
-                
-        #         # Get token provider for Speech service authentication
-        #         token_provider = get_bearer_token_provider(
-        #             self.credential, 
-        #             "https://cognitiveservices.azure.com/.default"
-        #         )
-                
-        #         # Initialize client with CLI credential and token provider
-        #         self.client = VideoTranslationClient(
-        #             region=os.getenv("SPEECH_REGION", ""),
-        #             api_version=os.getenv("API_VERSION", "2024-05-20-preview"),
-        #             credential=self.credential,
-        #             token_provider=token_provider
-        #         )
-        #     except Exception as cli_error:
-        #         print(f"AzureCliCredential failed: {str(cli_error)}")
-        #         print("WARNING: No valid credential available. Video translation operations will fail.")
-        #         self.credential = None
-        #         self.client = None  # Don't create client without valid credentials
-        #         print("ERROR: Unable to initialize VideoTranslationClient with token-based auth")
     
     @kernel_function(description="Translates a video file from source language to target language")
     def translate_video(self, 
@@ -109,7 +64,7 @@ class VideoTranslationPlugin:
 
             voice_kind_enum = VoiceKind.PlatformVoice if voice_kind == "PlatformVoice" else VoiceKind.PersonalVoice
             
-            success, error, translation, iteration = self.client.create_translate_and_run_first_iteration_until_terminated(
+            success, error, translation, iteration, translation_info, iteration_info = self.client.create_translate_and_run_first_iteration_until_terminated(
                 video_file_url=video_url,
                 source_locale=source_locale,
                 target_locale=target_locale,
@@ -121,19 +76,8 @@ class VideoTranslationPlugin:
             
             if success:
                 translation_id = translation.id
-                result_urls = ""
                 
-                if iteration and iteration.result:
-                    if iteration.result.translatedVideoFileUrl:
-                        result_urls += f"Translated Video: {iteration.result.translatedVideoFileUrl}\n"
-                    if iteration.result.sourceLocaleSubtitleWebvttFileUrl:
-                        result_urls += f"Source Subtitles: {iteration.result.sourceLocaleSubtitleWebvttFileUrl}\n"
-                    if iteration.result.targetLocaleSubtitleWebvttFileUrl:
-                        result_urls += f"Target Subtitles: {iteration.result.targetLocaleSubtitleWebvttFileUrl}\n"
-                    if iteration.result.metadataJsonWebvttFileUrl:
-                        result_urls += f"Metadata: {iteration.result.metadataJsonWebvttFileUrl}\n"
-                
-                return f"Translation successful! Translation ID: {translation_id}\n{result_urls}"
+                return f"Translation successful! Translation ID: {translation_id} Result translation:{translation_info} Result iteration:{iteration_info}"
             else:
                 return f"Translation failed: {error}"
         except Exception as e:
@@ -168,19 +112,19 @@ class VideoTranslationPlugin:
             
             if success:
                 iteration_id = iteration.id
-                result_urls = ""
+                results = ""
                 
                 if iteration.result:
                     if iteration.result.translatedVideoFileUrl:
-                        result_urls += f"Translated Video: {iteration.result.translatedVideoFileUrl}\n"
+                        results += f"Translated Video: {iteration.result.translatedVideoFileUrl}\n"
                     if iteration.result.sourceLocaleSubtitleWebvttFileUrl:
-                        result_urls += f"Source Subtitles: {iteration.result.sourceLocaleSubtitleWebvttFileUrl}\n"
+                        results += f"Source Subtitles: {iteration.result.sourceLocaleSubtitleWebvttFileUrl}\n"
                     if iteration.result.targetLocaleSubtitleWebvttFileUrl:
-                        result_urls += f"Target Subtitles: {iteration.result.targetLocaleSubtitleWebvttFileUrl}\n"
+                        results += f"Target Subtitles: {iteration.result.targetLocaleSubtitleWebvttFileUrl}\n"
                     if iteration.result.metadataJsonWebvttFileUrl:
-                        result_urls += f"Metadata: {iteration.result.metadataJsonWebvttFileUrl}\n"
+                        results += f"Metadata: {iteration.result.metadataJsonWebvttFileUrl}\n"
                 
-                return f"Iteration successfully created! Iteration ID: {iteration_id}\n{result_urls}"
+                return f"Iteration successfully created! Iteration ID: {iteration_id}\n Translation: {translation} \n Iteration Results:{results}"
             else:
                 return f"Iteration creation failed: {error}"
         except Exception as e:
@@ -192,16 +136,10 @@ class VideoTranslationPlugin:
         try:
             success, error, translations = self.client.request_list_translations()
             
-            if success and translations and translations.value:
-                result = "Your translations:\n"
-                for idx, translation in enumerate(translations.value):
-                    result += f"{idx+1}. ID: {translation.id}\n"
-                    result += f"   Status: {translation.status}\n"
-                    result += f"   Created: {translation.createdDateTime}\n"
-                    result += f"   Source: {translation.input.sourceLocale} → Target: {translation.input.targetLocale}\n\n"
-                return result
+            if success and translations:
+                return translations
             else:
-                return "No translations found or error retrieving translations."
+                return "Error when retrieving translation list: {error}"
         except Exception as e:
             return f"An error occurred while listing translations: {str(e)}"
 
@@ -212,22 +150,22 @@ class VideoTranslationPlugin:
             success, error, translation = self.client.request_get_translation(translation_id=translation_id)
             
             if success and translation:
-                result = f"Translation ID: {translation.id}\n"
-                result += f"Status: {translation.status}\n"
-                result += f"Created: {translation.createdDateTime}\n"
-                result += f"Last Action: {translation.lastActionDateTime}\n"
-                result += f"Source: {translation.input.sourceLocale} → Target: {translation.input.targetLocale}\n"
-                result += f"Voice Kind: {translation.input.voiceKind}\n"
+                # result = f"Translation ID: {translation.id}\n"
+                # result += f"Status: {translation.status}\n"
+                # result += f"Created: {translation.createdDateTime}\n"
+                # result += f"Last Action: {translation.lastActionDateTime}\n"
+                # result += f"Source: {translation.input.sourceLocale} → Target: {translation.input.targetLocale}\n"
+                # result += f"Voice Kind: {translation.input.voiceKind}\n"
                 
-                if translation.latestSucceededIteration and translation.latestSucceededIteration.result:
-                    iter_result = translation.latestSucceededIteration.result
-                    result += "\nLatest successful iteration results:\n"
-                    if iter_result.translatedVideoFileUrl:
-                        result += f"Translated Video: {iter_result.translatedVideoFileUrl}\n"
-                    if iter_result.targetLocaleSubtitleWebvttFileUrl:
-                        result += f"Target Subtitles: {iter_result.targetLocaleSubtitleWebvttFileUrl}\n"
+                # if translation.latestSucceededIteration and translation.latestSucceededIteration.result:
+                #     iter_result = translation.latestSucceededIteration.result
+                #     result += "\nLatest successful iteration results:\n"
+                #     if iter_result.translatedVideoFileUrl:
+                #         result += f"Translated Video: {iter_result.translatedVideoFileUrl}\n"
+                #     if iter_result.targetLocaleSubtitleWebvttFileUrl:
+                #         result += f"Target Subtitles: {iter_result.targetLocaleSubtitleWebvttFileUrl}\n"
                 
-                return result
+                return translation
             else:
                 return f"Translation not found or error: {error}"
         except Exception as e:
@@ -245,45 +183,6 @@ class VideoTranslationPlugin:
                 return f"Failed to delete translation: {error}"
         except Exception as e:
             return f"An error occurred while deleting the translation: {str(e)}"
-        
-    # @kernel_function(description="Tests Azure Storage RBAC access")
-    # def test_storage_access(self, blob_url: Annotated[str, "The Azure blob URL to test access"]) -> Annotated[str, "Returns the access status"]:
-    #     """Tests if the agent can access the Azure Storage blob using RBAC."""
-    #     try:
-    #         if not self.credential:
-    #             return "No valid credential available for storage access."
-                
-    #         match = re.match(r'https://([^/]+)/([^/]+)/(.+)', blob_url)
-    #         if not match:
-    #             return f"Invalid blob URL format: {blob_url}"
-                
-    #         account_name = match.group(1).split('.')[0]
-    #         container_name = match.group(2)
-    #         blob_name = match.group(3)
-            
-    #         account_url = f"https://{account_name}.blob.core.windows.net"
-    #         blob_service_client = BlobServiceClient(
-    #             account_url=account_url,
-    #             credential=self.credential
-    #         )
-            
-    #         container_client = blob_service_client.get_container_client(container_name)
-            
-    #         blobs = list(container_client.list_blobs(name_starts_with=blob_name, max_results=1))
-            
-    #         blob_client = container_client.get_blob_client(blob_name)
-            
-    #         properties = blob_client.get_blob_properties()
-            
-    #         return (f"Successfully accessed storage using Managed Identity.\n"
-    #                f"Account: {account_name}\n"
-    #                f"Container: {container_name}\n"
-    #                f"Blob name: {properties.name}\n"
-    #                f"Content type: {properties.content_settings.content_type}\n"
-    #                f"Size: {properties.size} bytes\n"
-    #                f"Last modified: {properties.last_modified}")
-    #     except Exception as e:
-    #         return f"Error testing storage access: {str(e)}\n\nThis may indicate that the Managed Identity does not have sufficient RBAC permissions on this storage account. Ensure the MI has been assigned an appropriate role (like Storage Blob Data Reader)."
 
     @kernel_function(description="Uploads content to Azure Blob Storage using Managed Identity")
     def upload_to_storage(self, 
@@ -370,49 +269,7 @@ class VideoTranslationPlugin:
                 return f"Error downloading blob content: {str(e)}\n\nThis may indicate that the Managed Identity does not have sufficient RBAC permissions (like Storage Blob Data Reader) on this storage account."
         except Exception as e:
              return f"Error initializing storage client: {str(e)}"
-    
-    # @kernel_function(description="Reads a specific blob from a URL using Managed Identity")
-    # def read_blob_from_url(self, blob_url: Annotated[str, "The complete URL of the blob to read"]) -> Annotated[str, "Returns the blob content or error message"]:
-    #     """Reads content from a blob storage URL using Managed Identity."""
-    #     try:
-    #         if not self.credential:
-    #             return "No valid credential available for storage access."
-            
-    #         match = re.match(r'https://([^/]+)/([^/]+)/(.+)', blob_url)
-    #         if not match:
-    #             return f"Invalid blob URL format: {blob_url}"
-                
-    #         account_name = match.group(1).split('.')[0]
-    #         container_name = match.group(2)
-    #         blob_name = match.group(3)
-            
-    #         blob_client = BlobClient(
-    #             account_url=f"https://{account_name}.blob.core.windows.net",
-    #             container_name=container_name,
-    #             blob_name=blob_name,
-    #             credential=self.credential
-    #         )
-            
-    #         if not blob_client.exists():
-    #             return f"Error: The blob at URL '{blob_url}' does not exist."
-            
-    #         download_stream = blob_client.download_blob()
-    #         content = download_stream.readall().decode('utf-8')
-            
-    #         properties = blob_client.get_blob_properties()
-    #         content_type = properties.content_settings.content_type
-    #         size = properties.size
-            
-    #         content_preview = content[:1000] + "..." if len(content) > 1000 else content
-            
-    #         return (f"Successfully read blob from URL using Managed Identity.\n"
-    #                f"URL: {blob_url}\n"
-    #                f"Content Type: {content_type}\n"
-    #                f"Size: {size} bytes\n\n"
-    #                f"Content Preview:\n{content_preview}")
-    #     except Exception as e:
-    #         return f"Error reading blob from URL: {str(e)}"
-
+        
 async def main() -> None:
     ai_agent_settings = AzureAIAgentSettings.create()
     
