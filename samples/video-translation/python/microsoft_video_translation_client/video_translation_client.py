@@ -10,6 +10,7 @@ import locale
 import os
 import json
 import dataclasses
+import logging
 from termcolor import colored
 from datetime import datetime, timedelta
 from typing import Optional, Callable
@@ -21,6 +22,8 @@ from video_translation_util import *
 import time
 from azure.core.credentials import TokenCredential
 from azure.identity import DefaultAzureCredential, get_bearer_token_provider
+
+logger = logging.getLogger(__name__)
 
 class VideoTranslationClient:
     URL_SEGMENT_NAME_TRANSLATIONS = "translations"
@@ -87,7 +90,7 @@ class VideoTranslationClient:
                     self.token_expiry = current_time + timedelta(minutes=55)
                     return self.token
         except Exception as e:
-            print(f"Failed to get authentication token: {str(e)}")
+            logger.Exception(f"Failed to get authentication token: {str(e)}")
             
         return None
     
@@ -98,10 +101,9 @@ class VideoTranslationClient:
         token = self.get_auth_token()
         if token:
             headers["Authorization"] = f"Bearer {token}"
-            return headers
+            return True, headers
         else:
-            print("Failed to obtain valid token")
-            raise ValueError("Authentication failed: Unable to obtain a valid token")
+            return False, "Authentication failed: Unable to obtain a valid token"
             
     def create_translate_and_run_first_iteration_until_terminated(
         self,
@@ -206,18 +208,18 @@ class VideoTranslationClient:
             # translation_description = None,
             operation_id = operation_id)
         if not success or operation_location is None:
-            print(colored(f"Failed to create translation with ID {translation_id} with error: {error}", 'red'))
+            logger.error(colored(f"Failed to create translation with ID {translation_id} with error: {error}", 'red'))
             return False, error, None
 
         self.request_operation_until_terminated(operation_location)
         
         success, error, response_translation = self.request_get_translation(translation_id)
         if not success:
-            print(colored(f"Failed to query translation {translation_id} with error: {error}", 'red'))
+            logger.error(colored(f"Failed to query translation {translation_id} with error: {error}", 'red'))
             return False, error, None
         if response_translation.status != OperationStatus.Succeeded:
-            print(colored(f"Translation creation failed with error: {error}", 'red'))
-            print(json.dumps(dataclasses.asdict(response_translation), indent = 2))
+            logger.error(colored(f"Translation creation failed with error: {error}", 'red'))
+            logger.debug(json.dumps(dataclasses.asdict(response_translation), indent = 2))
             return False, response_translation.translationFailureReason, None
         
         return True, None, response_translation
@@ -227,19 +229,19 @@ class VideoTranslationClient:
         operation_location: Url):
         success, error, response_operation = self.request_get_operation(operation_location = operation_location, printUrl = True)
         if not success or response_operation is None:
-            print(colored(f"Failed to query operation for translation creation operation from location {operation_location} with error: {error}", 'red'))
-            return
+            logger.error(colored(f"Failed to query operation for translation creation operation from location {operation_location} with error: {error}", 'red'))
+            return error
         
         lastStatus = None
         while response_operation.status in [OperationStatus.Running, OperationStatus.NotStarted]:
             success, error, response_operation = self.request_get_operation(operation_location = operation_location, printUrl = False)
             if not success or response_operation is None:
-                print(colored(f"Failed to query operation for translation creation operation from location {operation_location} with error: {error}", 'red'))
-                return
+                logger.error(colored(f"Failed to query operation for translation creation operation from location {operation_location} with error: {error}", 'red'))
+                return error
             if lastStatus != response_operation.status:
-                print(response_operation.status)
+                logger.debug(response_operation.status)
                 lastStatus = response_operation.status
-            print(".", end="")
+            logger.debug(".", end="")
             time.sleep(5)
 
         return response_operation.status
@@ -267,18 +269,18 @@ class VideoTranslationClient:
             iteration_description = None,
             operation_id = None)
         if not success:
-            print(colored(f"Failed to create iteration with ID {iteration_id} for translation {translation_id} with error: {error}", 'red'))
+            logger.error(colored(f"Failed to create iteration with ID {iteration_id} for translation {translation_id} with error: {error}", 'red'))
             return False, error, None
         
         self.request_operation_until_terminated(operation_location)
         
         success, error, response_iteration = self.request_get_iteration(translation_id, iteration_id)
         if not success:
-            print(colored(f"Failed to query iteration {iteration_id} for translation {translation_id} with error: {error}", 'red'))
+            logger.error(colored(f"Failed to query iteration {iteration_id} for translation {translation_id} with error: {error}", 'red'))
             return False, error, None
         if response_iteration.status != OperationStatus.Succeeded:
-            print(colored(f"Iteration creation failed with error: {error}", 'red'))
-            print(json.dumps(dataclasses.asdict(operation_location), indent = 2))
+            logger.error(colored(f"Iteration creation failed with error: {error}", 'red'))
+            logger.debug(json.dumps(dataclasses.asdict(operation_location), indent = 2))
             return False, response_iteration.translationFailureReason, None
         
         return True, None, response_iteration
@@ -354,7 +356,9 @@ class VideoTranslationClient:
         if operation_location is None:
             raise ValueError
 
-        headers = self.build_request_header()
+        success, headers = self.build_request_header()
+        if not success:
+            return False, headers, None
         
         response = self.http.request("GET", operation_location.url, headers = headers)
         
@@ -378,7 +382,9 @@ class VideoTranslationClient:
             raise ValueError
 
         url = self.build_translation_url(translation_id)
-        headers = self.build_request_header()
+        success, headers = self.build_request_header()
+        if not success:
+            return False, headers, None
         
         response = self.http.request("GET", url.url, headers = headers)
         
@@ -403,7 +409,9 @@ class VideoTranslationClient:
             raise ValueError
 
         url = self.build_iteration_url(translation_id, iteration_id)
-        headers = self.build_request_header()
+        success, headers = self.build_request_header()
+        if not success:
+            return False, headers, None
         
         response = self.http.request("GET", url.url, headers = headers)
         
@@ -437,7 +445,9 @@ class VideoTranslationClient:
         
         url = append_url_args(url, args)
         
-        headers = self.build_request_header()
+        success, headers = self.build_request_header()
+        if not success:
+            return False, headers, None
         
         response = self.http.request("GET", url.url, headers = headers)
         
@@ -445,7 +455,7 @@ class VideoTranslationClient:
         if not response.status in [200]:
             error = response.data.decode('utf-8')
             return False, error, None
-        response_translations_json = response.json()
+        response_translations_json = response.json(), ""
         
         return True, None, response_translations_json
     
